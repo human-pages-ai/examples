@@ -7,6 +7,8 @@ import type {
   CreateJobResponse,
   PaidJobResponse,
   ReviewResponse,
+  ActivationStatusResponse,
+  ActivationCodeResponse,
 } from './types.js';
 
 // Retry delays in ms — exponential backoff matching the platform's webhook delivery pattern
@@ -46,9 +48,15 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
       // Don't retry client errors (4xx) — they won't succeed on retry
       if (res.status >= 400 && res.status < 500) {
-        const errorBody = await res.json().catch(() => ({}));
+        const errorBody = await res.json().catch(() => ({})) as { error?: string; message?: string; code?: string };
+        if (res.status === 403 && errorBody.code === 'AGENT_PENDING') {
+          throw new Error(
+            'Agent is not yet activated. You must activate before performing this action.\n'
+            + 'Activate via social post (free, BASIC tier) or payment (PRO tier) at humanpages.ai.'
+          );
+        }
         throw new Error(
-          `API ${res.status}: ${(errorBody as { error?: string }).error || res.statusText}`
+          `API ${res.status}: ${errorBody.message || errorBody.error || res.statusText}`
         );
       }
 
@@ -90,23 +98,39 @@ export async function registerAgent(): Promise<RegisterResponse> {
   });
 }
 
-export async function searchHumans(params: {
-  lat: number;
-  lng: number;
-  radius: number;
+export async function searchHumans(params?: {
+  lat?: number;
+  lng?: number;
+  radius?: number;
 }): Promise<Human[]> {
-  return request<Human[]>('/api/humans/search', {
-    query: {
-      lat: params.lat.toString(),
-      lng: params.lng.toString(),
-      radius: params.radius.toString(),
-      available: 'true',
-    },
-  });
+  const query: Record<string, string> = { available: 'true' };
+  if (params?.lat) query.lat = params.lat.toString();
+  if (params?.lng) query.lng = params.lng.toString();
+  if (params?.radius) query.radius = params.radius.toString();
+  return request<Human[]>('/api/humans/search', { query });
 }
 
 export async function getHuman(humanId: string): Promise<Human> {
   return request<Human>(`/api/humans/${humanId}`);
+}
+
+export async function getHumanProfile(humanId: string): Promise<Human> {
+  return request<Human>(`/api/humans/${humanId}/profile`);
+}
+
+export async function getActivationStatus(): Promise<ActivationStatusResponse> {
+  return request<ActivationStatusResponse>('/api/agents/activate/status');
+}
+
+export async function requestActivationCode(): Promise<ActivationCodeResponse> {
+  return request<ActivationCodeResponse>('/api/agents/activate/social', { method: 'POST' });
+}
+
+export async function verifySocialActivation(postUrl: string): Promise<{ status: string; tier: string }> {
+  return request<{ status: string; tier: string }>('/api/agents/activate/social/verify', {
+    method: 'POST',
+    body: { postUrl },
+  });
 }
 
 export async function getJob(jobId: string): Promise<Job> {

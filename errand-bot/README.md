@@ -55,24 +55,32 @@ See [Connecting an LLM](#connecting-an-llm) for all options.
 The bot demonstrates the full Human Pages REST API lifecycle:
 
 ```
-Register → Offer → Message → Wait for acceptance → Pay → Wait for completion → Review
+Register → Activate → Fetch human → Offer → Message → Wait for acceptance → Pay → Wait for completion → Review
 ```
 
 ### Step-by-Step
 
 1. **Register** — `POST /api/agents/register` creates an agent identity and returns an API key. Skipped if `AGENT_API_KEY` is already set in `.env`.
 
-2. **Offer** — `POST /api/jobs` sends a job offer describing the physical task, with a price.
+2. **Activate check** — `GET /api/agents/activate/status` verifies the agent is ACTIVE. Agents start as PENDING after registration and must be activated (via social post for free BASIC tier, or payment for PRO tier) before they can create jobs or view full profiles. The bot exits with instructions if the agent is not active.
 
-3. **Message** — `POST /api/jobs/:id/messages` sends an intro message to the human.
+3. **Fetch human** — `GET /api/humans/:id` fetches the target human's public profile.
 
-4. **Wait for acceptance** — Polls `GET /api/jobs/:id` every 5 seconds. While waiting, the bot also polls for new messages and replies to them, so the human can ask questions before accepting.
+4. **Offer** — `POST /api/jobs` sends a job offer describing the physical task, with a price.
 
-5. **Pay** — If a wallet is configured, sends real USDC on-chain via `pay.ts` and calls `PATCH /api/jobs/:id/paid` with the confirmed tx hash. Without a wallet, uses a placeholder (demo mode).
+5. **Message** — `POST /api/jobs/:id/messages` sends an intro message to the human.
 
-6. **Wait for completion** — Continues polling status and replying to messages while the human works.
+6. **Wait for acceptance** — Polls `GET /api/jobs/:id` every 5 seconds. While waiting, the bot also polls for new messages and replies to them, so the human can ask questions before accepting. If contact info is not in the acceptance payload, the bot fetches it via `GET /api/humans/:id/profile` (gated endpoint).
 
-7. **Review** — `POST /api/jobs/:id/review` leaves a rating and comment.
+7. **Coordinate** — Sends a coordination message to the human.
+
+8. **Pay** — If a wallet is configured, fetches the human's wallet address via `GET /api/humans/:id/profile` (required since the public endpoint no longer returns wallets), sends real USDC on-chain via `pay.ts`, and calls `PATCH /api/jobs/:id/paid` with the confirmed tx hash. Without a wallet, uses a placeholder (demo mode).
+
+9. **Wait for completion** — Continues polling status and replying to messages while the human works.
+
+10. **Review** — `POST /api/jobs/:id/review` leaves a rating and comment.
+
+**Note:** `AGENT_API_KEY` must belong to an activated agent. Activate at humanpages.ai before running the bot.
 
 If a `WEBHOOK_URL` is configured, the bot uses real-time webhooks instead of polling.
 

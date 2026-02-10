@@ -2,6 +2,9 @@ import { config } from './config.js';
 import {
   registerAgent,
   getHuman,
+  getHumanProfile,
+  getActivationStatus,
+  requestActivationCode,
   createJob,
   sendMessage,
   getMessages,
@@ -17,7 +20,7 @@ import { isPaymentConfigured, loadWalletAccount, getUsdcBalance, sendUsdc } from
  * Main bot lifecycle — demonstrates how an AI agent hires a real human
  * for a physical-world task it cannot do on its own:
  *
- *   Register → Fetch human → Offer → Message → Wait → Pay → Wait → Review
+ *   Register → Activate check → Fetch human → Offer → Message → Wait → Pay → Wait → Review
  */
 export async function runBot(humanId: string): Promise<void> {
   console.log('\n=== Local Errand Bot ===');
@@ -37,17 +40,60 @@ export async function runBot(humanId: string): Promise<void> {
     config.agentApiKey = reg.apiKey;
     agentId = reg.agent.id;
     console.log(`  Registered as "${reg.agent.name}" (id: ${agentId})`);
-    console.log(`  API key: ${reg.apiKey.substring(0, 8)}... (save this to .env!)`);
+    console.log(`  API key: ${reg.apiKey}`);
+    console.log('  ⚠️  Save this key to AGENT_API_KEY in your .env — it cannot be retrieved later!');
   }
 
-  // ── Step 2: Fetch the target human ──
-  console.log(`\nStep 2: Fetching human ${humanId}...`);
+  // ── Step 2: Check activation status ──
+  console.log('\nStep 2: Checking agent activation status...');
+  try {
+    const activation = await getActivationStatus();
+    const jobsInfo = activation.jobLimit != null ? ` | Jobs today: ${activation.jobsToday ?? 0}/${activation.jobLimit}` : '';
+    console.log(`  Status: ${activation.status} | Tier: ${activation.tier ?? 'none'}${jobsInfo}`);
+
+    if (activation.status !== 'ACTIVE') {
+      console.error(`\n  ❌ Agent is ${activation.status}. You must activate before creating jobs.\n`);
+
+      // Request activation code and display the API's per-platform instructions
+      try {
+        const activationCode = await requestActivationCode();
+        console.error(`  Activation code: ${activationCode.code}`);
+        console.error(`  Expires: ${activationCode.expiresAt}\n`);
+        if (activationCode.requirements) {
+          console.error(`  Requirements: ${activationCode.requirements}\n`);
+        }
+
+        const suggestedPosts = activationCode.suggestedPosts || {};
+        const platforms = activationCode.platforms || [];
+        if (platforms.length > 0) {
+          console.error('  Copy-paste for each platform:\n');
+          for (const platform of platforms) {
+            console.error(`    ${platform}:`);
+            console.error(`      ${suggestedPosts[platform] || activationCode.code}\n`);
+          }
+        }
+
+        console.error('  After posting, run:');
+        console.error(`    npx tsx src/activate.ts <post_url>\n`);
+      } catch (err) {
+        console.error(`  Could not get activation code: ${(err as Error).message}`);
+        console.error('  Activate your agent at humanpages.ai, then re-run the bot.\n');
+      }
+      return;
+    }
+  } catch (err) {
+    console.log(`  Could not check activation status: ${(err as Error).message}`);
+    console.log('  Continuing — the API will reject requests if agent is not active.');
+  }
+
+  // ── Step 3: Fetch the target human ──
+  console.log(`\nStep 3: Fetching human ${humanId}...`);
   const candidate = await getHuman(humanId);
   console.log(`  ${candidate.name} (@${candidate.username}) in ${candidate.location ?? 'unknown'}`);
   console.log(`  ${candidate.reputation.jobsCompleted} jobs, rating: ${candidate.reputation.avgRating ?? 'n/a'}`);
 
-  // ── Step 3: Create job offer ──
-  console.log('\nStep 3: Sending errand job offer...');
+  // ── Step 4: Create job offer ──
+  console.log('\nStep 4: Sending errand job offer...');
 
   const callbackUrl = config.webhookUrl ? `${config.webhookUrl}/webhook` : undefined;
 
@@ -67,8 +113,8 @@ export async function runBot(humanId: string): Promise<void> {
   console.log(`  Price: $${config.jobPriceUsdc} USDC`);
   notify.jobCreated(job.id, candidate.name, config.jobPriceUsdc);
 
-  // ── Step 4: Send an intro message ──
-  console.log('\nStep 4: Sending intro message...');
+  // ── Step 5: Send an intro message ──
+  console.log('\nStep 5: Sending intro message...');
   const knownIds = new Set<string>();
   try {
     const intro = await sendMessage(
@@ -83,8 +129,8 @@ export async function runBot(humanId: string): Promise<void> {
     console.log(`  Could not send message: ${(err as Error).message}`);
   }
 
-  // ── Step 5: Wait for acceptance (while responding to messages) ──
-  console.log('\nStep 5: Waiting for human to accept the errand...');
+  // ── Step 6: Wait for acceptance (while responding to messages) ──
+  console.log('\nStep 6: Waiting for human to accept the errand...');
   console.log('  (The human will receive an email/Telegram notification)');
   console.log('  (Bot will reply to messages while waiting)');
 
@@ -117,10 +163,25 @@ export async function runBot(humanId: string): Promise<void> {
     if (c.telegram) console.log(`    Telegram: ${c.telegram}`);
     if (c.whatsapp) console.log(`    WhatsApp: ${c.whatsapp}`);
     if (c.signal) console.log(`    Signal: ${c.signal}`);
+  } else {
+    // Webhook/polling mode may not include contact — fetch via gated profile
+    console.log('  Contact info not in acceptance payload, fetching full profile...');
+    try {
+      const fullProfile = await getHumanProfile(candidate.id);
+      const c = { email: fullProfile.contactEmail, telegram: fullProfile.telegram, whatsapp: fullProfile.whatsapp, signal: fullProfile.signal };
+      const contactParts = [c.email, c.telegram, c.whatsapp, c.signal].filter(Boolean);
+      if (contactParts.length > 0) {
+        console.log(`  Contact info: ${contactParts.join(' | ')}`);
+      } else {
+        console.log('  No contact info available on profile.');
+      }
+    } catch (err) {
+      console.log(`  Could not fetch full profile: ${(err as Error).message}`);
+    }
   }
 
-  // ── Step 6: Send coordination message ──
-  console.log('\nStep 6: Sending coordination details...');
+  // ── Step 7: Send coordination message ──
+  console.log('\nStep 7: Sending coordination details...');
   try {
     const coordMsg = await sendMessage(
       job.id,
@@ -134,8 +195,8 @@ export async function runBot(humanId: string): Promise<void> {
     console.log(`  Could not send message: ${(err as Error).message}`);
   }
 
-  // ── Step 7: Record payment ──
-  console.log('\nStep 7: Recording payment...');
+  // ── Step 8: Record payment ──
+  console.log('\nStep 8: Recording payment...');
 
   if (isPaymentConfigured()) {
     // Real on-chain USDC payment
@@ -154,8 +215,8 @@ export async function runBot(humanId: string): Promise<void> {
         );
       }
 
-      // Re-fetch human profile for wallet addresses
-      const human = await getHuman(candidate.id);
+      // Fetch full profile (gated endpoint) for wallet addresses
+      const human = await getHumanProfile(candidate.id);
       const wallet = human.wallets?.find((w) => w.network === network);
       if (!wallet) {
         throw new Error(
@@ -199,8 +260,8 @@ export async function runBot(humanId: string): Promise<void> {
     }
   }
 
-  // ── Step 8: Wait for completion (while responding to messages) ──
-  console.log('\nStep 8: Waiting for human to complete the errand...');
+  // ── Step 9: Wait for completion (while responding to messages) ──
+  console.log('\nStep 9: Waiting for human to complete the errand...');
   console.log('  (The human can message you while working)');
 
   try {
@@ -226,8 +287,8 @@ export async function runBot(humanId: string): Promise<void> {
     console.log(`  Errand completed! (status: ${completed.status})`);
     notify.jobCompleted(job.id, accepted.data.humanName ?? accepted.data.humanId);
 
-    // ── Step 9: Leave a review ──
-    console.log('\nStep 9: Leaving a review...');
+    // ── Step 10: Leave a review ──
+    console.log('\nStep 10: Leaving a review...');
     const review = await reviewJob(job.id, {
       rating: 5,
       comment: 'Package delivered on time, great communication. Would hire again!',

@@ -13,11 +13,11 @@ export interface Human {
   rateCurrency: string | null;
   minRateUsdEstimate: number | null;
   rateType: string | null;
-  contactEmail: string | null;
-  telegram: string | null;
-  whatsapp: string | null;
-  signal: string | null;
-  wallets: {
+  contactEmail?: string | null;
+  telegram?: string | null;
+  whatsapp?: string | null;
+  signal?: string | null;
+  wallets?: {
     address: string;
     network: string;
   }[];
@@ -65,6 +65,25 @@ export interface Job {
   priceUsdc: string;
   humanId: string;
   human?: { id: string; name: string };
+}
+
+// ── Activation types ──
+
+export interface ActivationStatusResponse {
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'BANNED';
+  tier: 'BASIC' | 'PRO' | null;
+  expiresAt: string | null;
+  jobsToday: number;
+  jobLimit: number;
+}
+
+export interface ActivationCodeResponse {
+  code: string;
+  expiresAt: string;
+  requirements?: string;
+  suggestedPosts?: Record<string, string>;
+  platforms?: string[];
+  instructions?: Record<string, string>;
 }
 
 // ── Message types ──
