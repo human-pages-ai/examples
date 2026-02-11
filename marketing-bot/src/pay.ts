@@ -20,28 +20,34 @@ import { ask } from './prompt.js';
 interface NetworkConfig {
   chain: Chain;
   rpcs: string[];
+  confirmations: number;
 }
 
 const NETWORKS: Record<string, NetworkConfig> = {
   ethereum: {
     chain: mainnet,
     rpcs: ['https://eth.llamarpc.com', 'https://rpc.ankr.com/eth'],
+    confirmations: 12,
   },
   base: {
     chain: base,
     rpcs: ['https://mainnet.base.org', 'https://base.llamarpc.com'],
+    confirmations: 10,
   },
   polygon: {
     chain: polygon,
     rpcs: ['https://polygon-rpc.com', 'https://rpc.ankr.com/polygon'],
+    confirmations: 10,
   },
   arbitrum: {
     chain: arbitrum,
     rpcs: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum.llamarpc.com'],
+    confirmations: 10,
   },
   'base-sepolia': {
     chain: baseSepolia,
     rpcs: ['https://sepolia.base.org'],
+    confirmations: 2,
   },
 };
 
@@ -198,12 +204,12 @@ export async function sendUsdc(
   });
 
   console.log(`  Tx sent: ${txHash}`);
-  console.log('  Waiting for confirmation...');
+  console.log(`  Waiting for ${net.confirmations} confirmations...`);
 
-  // Wait for receipt
+  // Wait for receipt — must match the backend's required confirmations
   const receipt = await publicClient.waitForTransactionReceipt({
     hash: txHash,
-    confirmations: 2,
+    confirmations: net.confirmations,
   });
 
   if (receipt.status !== 'success') {
