@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config.js';
 import {
   registerAgent,
@@ -279,7 +281,12 @@ export async function runBot(humanId: string): Promise<void> {
     agentId = reg.agent.id;
     console.log(`  Registered as "${reg.agent.name}" (id: ${agentId})`);
     console.log(`  API key: ${reg.apiKey}`);
-    console.log('  Save this key to AGENT_API_KEY in your .env — it cannot be retrieved later!');
+
+    // Persist the key to .env so the user doesn't have to do it manually
+    const envPath = path.resolve(import.meta.dirname, '..', '.env');
+    const envContents = fs.readFileSync(envPath, 'utf-8');
+    fs.writeFileSync(envPath, envContents.replace(/^AGENT_API_KEY=.*$/m, `AGENT_API_KEY=${reg.apiKey}`));
+    console.log('  API key saved to .env');
   }
 
   // ── Step 2: Check activation status ──
