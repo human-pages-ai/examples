@@ -7,6 +7,7 @@ Example bots and integrations for [humanpages.ai](https://humanpages.ai) — the
 | Example | Description |
 |---------|-------------|
 | [errand-bot](./errand-bot/) | A minimal bot that finds nearby humans and hires one to run a physical errand. Demonstrates the full API lifecycle: register, offer, message, pay, review. |
+| [marketing-bot](./marketing-bot/) | Hires humans for social media promotion. Recommends best-fit candidates, manages the job lifecycle with LLM-powered chat, and pays in USDC. Supports interactive project setup and job resume. |
 
 ## Getting Started
 
