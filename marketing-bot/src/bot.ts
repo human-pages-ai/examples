@@ -333,7 +333,8 @@ export async function runBot(humanId: string): Promise<void> {
   // ── Step 3: Fetch the target human ──
   console.log(`\nStep 3: Fetching human ${humanId}...`);
   const candidate = await getHuman(humanId);
-  console.log(`  ${candidate.name} (@${candidate.username}) in ${candidate.location ?? 'unknown'}`);
+  const candidateName = candidate.name ?? 'Unknown';
+  console.log(`  ${candidateName} (@${candidate.username}) in ${candidate.location ?? 'unknown'}`);
   console.log(`  Skills: ${candidate.skills.length > 0 ? candidate.skills.join(', ') : 'none listed'}`);
   console.log(`  ${candidate.reputation.jobsCompleted} jobs, rating: ${candidate.reputation.avgRating ?? 'n/a'}`);
 
@@ -378,13 +379,13 @@ export async function runBot(humanId: string): Promise<void> {
   console.log(`  Job created: ${job.id} (status: ${job.status})`);
   console.log(`  Price: $${config.jobPriceUsdc} USDC`);
   console.log(`  To resume this job later: npm run dev -- --resume ${job.id}`);
-  notify.jobCreated(job.id, candidate.name, config.jobPriceUsdc);
+  notify.jobCreated(job.id, candidateName, config.jobPriceUsdc);
 
   // ── Step 5: Send an intro message ──
   console.log('\nStep 5: Sending intro message...');
   const knownIds = new Set<string>();
   try {
-    let introBody = `Hi ${candidate.name}! We're hiring marketers to promote ${config.projectName}.`
+    let introBody = `Hi ${candidateName}! We're hiring marketers to promote ${config.projectName}.`
       + `${config.projectUrl ? ` (${config.projectUrl})` : ''}\n\n`
       + `${config.errandDescription}\n`;
     if (config.socialLinks) {
@@ -400,7 +401,7 @@ export async function runBot(humanId: string): Promise<void> {
   }
 
   // Hand off to the shared lifecycle
-  await runJobLifecycle(job.id, candidate.id, candidate.name, 'PENDING', knownIds);
+  await runJobLifecycle(job.id, candidate.id, candidateName, 'PENDING', knownIds);
 }
 
 /**
