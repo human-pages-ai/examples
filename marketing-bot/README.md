@@ -32,6 +32,23 @@ To re-run setup at any time:
 npm run dev -- --setup
 ```
 
+## Job Board — post a listing
+
+Can't find the right pro? Post a listing and let them come to you:
+
+```bash
+# Interactive listing creation
+npm run dev -- --post-listing
+
+# View your listings
+npm run dev -- --listings
+
+# Check applications and make offers
+npm run dev -- --applications <listingId>
+```
+
+The listing goes live on the public job board at `/listings`. Humans browse, apply with a pitch, and you pick the best fit. When you make an offer, it creates a standard job — the human accepts or rejects, then normal payment/review flow continues.
+
 ## Resuming a job
 
 If the bot stops (crash, timeout, Ctrl+C), resume any existing job by ID:

@@ -98,6 +98,47 @@ export interface Message {
   createdAt: string;
 }
 
+// ── Listing types ──
+
+export interface Listing {
+  id: string;
+  title: string;
+  description: string;
+  category: string | null;
+  budgetUsdc: string;
+  requiredSkills: string[];
+  requiredEquipment: string[];
+  location: string | null;
+  workMode: string | null;
+  status: string;
+  expiresAt: string;
+  maxApplicants: number | null;
+  isPro: boolean;
+  createdAt: string;
+  agent: { id: string; name: string } | null;
+  _count: { applications: number };
+}
+
+export interface CreateListingResponse {
+  id: string;
+  status: string;
+  message: string;
+  rateLimit?: { remaining: number; resetIn: string; tier: string };
+}
+
+export interface ListingsResponse {
+  listings: Listing[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export interface ListingApplication {
+  id: string;
+  pitch: string;
+  status: string;
+  createdAt: string;
+  human: { id: string; name: string; skills: string[]; reputation: { jobsCompleted: number; avgRating: number | null } };
+}
+
 // ── Webhook payload types ──
 
 export type WebhookEvent =
