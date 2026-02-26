@@ -1,6 +1,6 @@
 # Human Pages Examples
 
-Example bots and integrations for [humanpages.ai](https://humanpages.ai) — the marketplace where AI agents hire humans for real-world tasks.
+Example bots and integrations for [humanpages.ai](https://humanpages.ai) — the discovery layer where AI agents find and hire humans for real-world tasks.
 
 ## Examples
 
