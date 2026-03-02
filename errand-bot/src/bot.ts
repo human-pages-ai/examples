@@ -4,7 +4,6 @@ import {
   getHuman,
   getHumanProfile,
   getActivationStatus,
-  requestActivationCode,
   createJob,
   sendMessage,
   getMessages,
@@ -51,39 +50,13 @@ export async function runBot(humanId: string): Promise<void> {
     const jobsInfo = activation.jobLimit != null ? ` | Jobs today: ${activation.jobsToday ?? 0}/${activation.jobLimit}` : '';
     console.log(`  Status: ${activation.status} | Tier: ${activation.tier ?? 'none'}${jobsInfo}`);
 
-    if (activation.status !== 'ACTIVE') {
-      console.error(`\n  ❌ Agent is ${activation.status}. You must activate before creating jobs.\n`);
-
-      // Request activation code and display the API's per-platform instructions
-      try {
-        const activationCode = await requestActivationCode();
-        console.error(`  Activation code: ${activationCode.code}`);
-        console.error(`  Expires: ${activationCode.expiresAt}\n`);
-        if (activationCode.requirements) {
-          console.error(`  Requirements: ${activationCode.requirements}\n`);
-        }
-
-        const suggestedPosts = activationCode.suggestedPosts || {};
-        const platforms = activationCode.platforms || [];
-        if (platforms.length > 0) {
-          console.error('  Copy-paste for each platform:\n');
-          for (const platform of platforms) {
-            console.error(`    ${platform}:`);
-            console.error(`      ${suggestedPosts[platform] || activationCode.code}\n`);
-          }
-        }
-
-        console.error('  After posting, run:');
-        console.error(`    npx tsx src/activate.ts <post_url>\n`);
-      } catch (err) {
-        console.error(`  Could not get activation code: ${(err as Error).message}`);
-        console.error('  Activate your agent at humanpages.ai, then re-run the bot.\n');
-      }
+    if (activation.status === 'SUSPENDED' || activation.status === 'BANNED') {
+      console.error(`\n  Agent is ${activation.status}. Cannot proceed.`);
       return;
     }
   } catch (err) {
     console.log(`  Could not check activation status: ${(err as Error).message}`);
-    console.log('  Continuing — the API will reject requests if agent is not active.');
+    console.log('  Continuing — agents are auto-activated on registration.');
   }
 
   // ── Step 3: Fetch the target human ──

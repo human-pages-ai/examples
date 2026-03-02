@@ -66,7 +66,7 @@ Copy `.env.example` to `.env` and configure:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `API_URL` | Yes | Human Pages API (default: `https://humanpages.ai`) |
-| `AGENT_API_KEY` | No | Leave blank to auto-register on first run |
+| `AGENT_API_KEY` | No | Leave blank to auto-register on first run. Agent is auto-activated on PRO tier (free during launch) -- no activation needed |
 | `PROJECT_NAME` | No | Name of the project you're promoting |
 | `PROJECT_URL` | No | URL to drive traffic to |
 | `SOCIAL_LINKS` | No | Pipe-separated social accounts (e.g. `X/Twitter: https://x.com/You \| Instagram: https://instagram.com/You`) |

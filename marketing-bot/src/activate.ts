@@ -1,7 +1,15 @@
 import { config } from './config.js';
 import { getActivationStatus, verifySocialActivation } from './api.js';
 
+/**
+ * @deprecated Agents are now auto-activated on PRO tier at registration.
+ * This script is kept for backward compatibility but social activation
+ * is no longer required. It can still be used to earn a verified trust badge.
+ */
 async function main() {
+  console.log('Note: Agents are now auto-activated on PRO tier at registration.');
+  console.log('Social verification is optional — it earns a trust badge.\n');
+
   const postUrl = process.argv[2];
 
   if (!config.agentApiKey) {

@@ -6,7 +6,6 @@ import {
   getHuman,
   getHumanProfile,
   getActivationStatus,
-  requestActivationCode,
   getJob,
   createJob,
   sendMessage,
@@ -54,7 +53,10 @@ async function runJobLifecycle(
   humanName: string,
   jobStatus: string,
   knownIds: Set<string>,
+  jobPriceUsdc?: number,
 ): Promise<void> {
+  // Use the job's actual price if available, otherwise fall back to config
+  const priceUsdc = jobPriceUsdc ?? config.jobPriceUsdc;
   const onMessage = makeMessageHandler(jobId, knownIds);
 
   // ── Phase: Wait for acceptance ──
@@ -103,7 +105,7 @@ async function runJobLifecycle(
       if (config.socialLinks) {
         coordBody += `\nOur socials: ${config.socialLinks}\n`;
       }
-      coordBody += `\nPayment: $${config.jobPriceUsdc} USDC on ${config.paymentNetwork}.\n\n`
+      coordBody += `\nPayment: $${priceUsdc} USDC on ${config.paymentNetwork}.\n\n`
         + 'Once you\'re done, share the links to your posts here and mark the job as complete. '
         + 'I\'ll send payment right away!';
       const coordMsg = await sendMessage(jobId, coordBody);
@@ -129,9 +131,9 @@ async function runJobLifecycle(
         const balance = await getUsdcBalance(account, network);
         console.log(`  USDC balance on ${network}: ${balance}`);
 
-        if (parseFloat(balance) < config.jobPriceUsdc) {
+        if (parseFloat(balance) < priceUsdc) {
           throw new Error(
-            `Insufficient USDC balance: ${balance} < ${config.jobPriceUsdc}. `
+            `Insufficient USDC balance: ${balance} < ${priceUsdc}. `
             + `Fund your wallet on ${network}.`,
           );
         }
@@ -141,20 +143,20 @@ async function runJobLifecycle(
         if (!recipientAddress) {
           console.log('  No wallet address — skipping on-chain payment.');
         } else {
-          console.log(`\n  Ready to send $${config.jobPriceUsdc} USDC → ${recipientAddress} on ${network}`);
+          console.log(`\n  Ready to send $${priceUsdc} USDC → ${recipientAddress} on ${network}`);
 
           if (!await confirm('  Confirm payment?')) {
             console.log('  Payment skipped by operator.');
           } else {
             console.log(`  Sending...`);
-            const txHash = await sendUsdc(account, recipientAddress, config.jobPriceUsdc, network);
+            const txHash = await sendUsdc(account, recipientAddress, priceUsdc, network);
             console.log(`  Confirmed: ${txHash}`);
 
             const paid = await markJobPaid(jobId, {
               paymentTxHash: txHash,
               paymentNetwork: network,
               paymentToken: 'USDC',
-              paymentAmount: config.jobPriceUsdc,
+              paymentAmount: priceUsdc,
             });
             console.log(`  Payment recorded on platform: ${paid.status}`);
           }
@@ -254,7 +256,7 @@ export async function resumeBot(jobId: string): Promise<void> {
 
   console.log(`\nResuming from status: ${job.status}`);
 
-  await runJobLifecycle(jobId, humanId, humanName, job.status, knownIds);
+  await runJobLifecycle(jobId, humanId, humanName, job.status, knownIds, parseFloat(job.priceUsdc));
 }
 
 /**
@@ -296,38 +298,13 @@ export async function runBot(humanId: string): Promise<void> {
     const jobsInfo = activation.jobLimit != null ? ` | Jobs today: ${activation.jobsToday ?? 0}/${activation.jobLimit}` : '';
     console.log(`  Status: ${activation.status} | Tier: ${activation.tier ?? 'none'}${jobsInfo}`);
 
-    if (activation.status !== 'ACTIVE') {
-      console.error(`\n  Agent is ${activation.status}. You must activate before creating jobs.\n`);
-
-      try {
-        const activationCode = await requestActivationCode();
-        console.error(`  Activation code: ${activationCode.code}`);
-        console.error(`  Expires: ${activationCode.expiresAt}\n`);
-        if (activationCode.requirements) {
-          console.error(`  Requirements: ${activationCode.requirements}\n`);
-        }
-
-        const suggestedPosts = activationCode.suggestedPosts || {};
-        const platforms = activationCode.platforms || [];
-        if (platforms.length > 0) {
-          console.error('  Copy-paste for each platform:\n');
-          for (const platform of platforms) {
-            console.error(`    ${platform}:`);
-            console.error(`      ${suggestedPosts[platform] || activationCode.code}\n`);
-          }
-        }
-
-        console.error('  After posting, run:');
-        console.error(`    npx tsx src/activate.ts <post_url>\n`);
-      } catch (err) {
-        console.error(`  Could not get activation code: ${(err as Error).message}`);
-        console.error(`  Activate your agent at ${config.apiUrl}, then re-run the bot.\n`);
-      }
+    if (activation.status === 'SUSPENDED' || activation.status === 'BANNED') {
+      console.error(`\n  Agent is ${activation.status}. Cannot proceed.`);
       return;
     }
   } catch (err) {
     console.log(`  Could not check activation status: ${(err as Error).message}`);
-    console.log('  Continuing — the API will reject requests if agent is not active.');
+    console.log('  Continuing — agents are auto-activated on registration.');
   }
 
   // ── Step 3: Fetch the target human ──
@@ -401,7 +378,7 @@ export async function runBot(humanId: string): Promise<void> {
   }
 
   // Hand off to the shared lifecycle
-  await runJobLifecycle(job.id, candidate.id, candidateName, 'PENDING', knownIds);
+  await runJobLifecycle(job.id, candidate.id, candidateName, 'PENDING', knownIds, config.jobPriceUsdc);
 }
 
 /**

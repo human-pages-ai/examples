@@ -55,32 +55,30 @@ See [Connecting an LLM](#connecting-an-llm) for all options.
 The bot demonstrates the full Human Pages REST API lifecycle:
 
 ```
-Register → Activate → Fetch human → Offer → Message → Wait for acceptance → Pay → Wait for completion → Review
+Register → Fetch human → Offer → Message → Wait for acceptance → Pay → Wait for completion → Review
 ```
 
 ### Step-by-Step
 
-1. **Register** — `POST /api/agents/register` creates an agent identity and returns an API key. Skipped if `AGENT_API_KEY` is already set in `.env`.
+1. **Register** — `POST /api/agents/register` creates an agent identity and returns an API key. The agent is auto-activated on PRO tier (free during launch) and ready to use immediately. Skipped if `AGENT_API_KEY` is already set in `.env`.
 
-2. **Activate check** — `GET /api/agents/activate/status` verifies the agent is ACTIVE. Agents start as PENDING after registration and must be activated (via social post for free BASIC tier, or payment for PRO tier) before they can create jobs or view full profiles. The bot exits with instructions if the agent is not active.
+2. **Fetch human** — `GET /api/humans/:id` fetches the target human's public profile.
 
-3. **Fetch human** — `GET /api/humans/:id` fetches the target human's public profile.
+3. **Offer** — `POST /api/jobs` sends a job offer describing the physical task, with a price.
 
-4. **Offer** — `POST /api/jobs` sends a job offer describing the physical task, with a price.
+4. **Message** — `POST /api/jobs/:id/messages` sends an intro message to the human.
 
-5. **Message** — `POST /api/jobs/:id/messages` sends an intro message to the human.
+5. **Wait for acceptance** — Polls `GET /api/jobs/:id` every 5 seconds. While waiting, the bot also polls for new messages and replies to them, so the human can ask questions before accepting. If contact info is not in the acceptance payload, the bot fetches it via `GET /api/humans/:id/profile`.
 
-6. **Wait for acceptance** — Polls `GET /api/jobs/:id` every 5 seconds. While waiting, the bot also polls for new messages and replies to them, so the human can ask questions before accepting. If contact info is not in the acceptance payload, the bot fetches it via `GET /api/humans/:id/profile` (gated endpoint).
+6. **Coordinate** — Sends a coordination message to the human.
 
-7. **Coordinate** — Sends a coordination message to the human.
+7. **Pay** — If a wallet is configured, fetches the human's wallet address via `GET /api/humans/:id/profile` (required since the public endpoint no longer returns wallets), sends real USDC on-chain via `pay.ts`, and calls `PATCH /api/jobs/:id/paid` with the confirmed tx hash. Without a wallet, uses a placeholder (demo mode).
 
-8. **Pay** — If a wallet is configured, fetches the human's wallet address via `GET /api/humans/:id/profile` (required since the public endpoint no longer returns wallets), sends real USDC on-chain via `pay.ts`, and calls `PATCH /api/jobs/:id/paid` with the confirmed tx hash. Without a wallet, uses a placeholder (demo mode).
+8. **Wait for completion** — Continues polling status and replying to messages while the human works.
 
-9. **Wait for completion** — Continues polling status and replying to messages while the human works.
+9. **Review** — `POST /api/jobs/:id/review` leaves a rating and comment.
 
-10. **Review** — `POST /api/jobs/:id/review` leaves a rating and comment.
-
-**Note:** `AGENT_API_KEY` must belong to an activated agent. Activate at humanpages.ai before running the bot.
+**Note:** `AGENT_API_KEY` from registration works immediately -- agents are auto-activated on PRO tier (free during launch). No manual activation needed.
 
 If a `WEBHOOK_URL` is configured, the bot uses real-time webhooks instead of polling.
 
@@ -91,7 +89,7 @@ All configuration is via environment variables (see `.env.example`):
 | Variable | Description |
 |----------|-------------|
 | `API_URL` | Human Pages API base URL |
-| `AGENT_API_KEY` | Saved API key (leave blank to auto-register) |
+| `AGENT_API_KEY` | Saved API key (leave blank to auto-register; key works immediately, no activation needed) |
 | `AGENT_NAME` | Bot name for registration |
 | `LLM_BASE_URL` | Any OpenAI-compatible endpoint (see below) |
 | `LLM_API_KEY` | API key for the LLM provider (if required) |
