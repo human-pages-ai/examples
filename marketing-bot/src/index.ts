@@ -181,7 +181,7 @@ async function showListingsFlow(): Promise<void> {
   for (const l of data.listings) {
     const apps = l._count?.applications ?? 0;
     console.log(`  [${l.status}] $${l.budgetUsdc} — ${l.title}`);
-    console.log(`     ${apps} application(s) | Expires: ${new Date(l.expiresAt).toLocaleDateString()}`);
+    console.log(`     ${apps} application(s) | Expires: ${new Date(l.expiresAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`);
     console.log(`     ID: ${l.id}\n`);
   }
 
