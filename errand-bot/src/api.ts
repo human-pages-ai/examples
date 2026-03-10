@@ -107,7 +107,8 @@ export async function searchHumans(params?: {
   if (params?.lat) query.lat = params.lat.toString();
   if (params?.lng) query.lng = params.lng.toString();
   if (params?.radius) query.radius = params.radius.toString();
-  return request<Human[]>('/api/humans/search', { query });
+  const res = await request<{ results: Human[] }>('/api/humans/search', { query });
+  return res.results;
 }
 
 export async function getHuman(humanId: string): Promise<Human> {

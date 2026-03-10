@@ -178,7 +178,8 @@ export async function searchHumans(params?: {
   if (params?.lat) query.lat = params.lat.toString();
   if (params?.lng) query.lng = params.lng.toString();
   if (params?.radius) query.radius = params.radius.toString();
-  return request<Human[]>('/api/humans/search', { query });
+  const res = await request<{ results: Human[] }>('/api/humans/search', { query });
+  return res.results;
 }
 
 export async function getHuman(humanId: string): Promise<Human> {
@@ -214,6 +215,7 @@ export async function createJob(params: {
   title: string;
   description: string;
   priceUsdc: number;
+  paymentTiming?: 'upfront' | 'upon_completion';
   callbackUrl?: string;
   callbackSecret?: string;
 }): Promise<CreateJobResponse> {
@@ -235,6 +237,19 @@ export async function markJobPaid(
   return request<PaidJobResponse>(`/api/jobs/${jobId}/paid`, {
     method: 'PATCH',
     body: payment,
+  });
+}
+
+export async function approveCompletion(jobId: string): Promise<{ id: string; status: string; message: string }> {
+  return request<{ id: string; status: string; message: string }>(`/api/jobs/${jobId}/approve-completion`, {
+    method: 'PATCH',
+  });
+}
+
+export async function requestRevision(jobId: string, reason: string): Promise<{ id: string; status: string; message: string }> {
+  return request<{ id: string; status: string; message: string }>(`/api/jobs/${jobId}/request-revision`, {
+    method: 'PATCH',
+    body: { reason },
   });
 }
 
