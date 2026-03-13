@@ -1,0 +1,23 @@
+{
+  "name": "payroll-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fully autonomous payroll bot — pays humans on Human Pages using CDP agentic wallets (no manual signing)",
+  "scripts": {
+    "pay": "tsx src/index.ts",
+    "balance": "tsx src/balance.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@coinbase/cdp-sdk": "^1.45.0",
+    "dotenv": "^16.4.7",
+    "viem": "^2.45.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^22.0.0"
+  }
+}
