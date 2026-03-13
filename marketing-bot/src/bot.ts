@@ -12,6 +12,8 @@ import {
   getMessages,
   markJobPaid,
   reviewJob,
+  approveCompletion,
+  requestRevision,
 } from './api.js';
 import { waitForEventWithMessages } from './webhook.js';
 import { generateReply, getResponderName } from './responder.js';
@@ -44,7 +46,8 @@ function makeMessageHandler(jobId: string, knownIds: Set<string>) {
 /**
  * Run the job lifecycle from the appropriate phase based on current status.
  *
- * Statuses: PENDING → ACCEPTED → PAID → COMPLETED
+ * Statuses: PENDING → ACCEPTED → SUBMITTED → COMPLETED → PAID → REVIEWED (upon_completion)
+ * Statuses: PENDING → ACCEPTED → PAID → COMPLETED → REVIEWED (upfront)
  * The bot picks up wherever the job currently is.
  */
 async function runJobLifecycle(
@@ -54,10 +57,12 @@ async function runJobLifecycle(
   jobStatus: string,
   knownIds: Set<string>,
   jobPriceUsdc?: number,
+  paymentTiming: 'upfront' | 'upon_completion' = 'upon_completion',
 ): Promise<void> {
   // Use the job's actual price if available, otherwise fall back to config
   const priceUsdc = jobPriceUsdc ?? config.jobPriceUsdc;
   const onMessage = makeMessageHandler(jobId, knownIds);
+  const isUpfront = paymentTiming === 'upfront';
 
   // ── Phase: Wait for acceptance ──
   if (jobStatus === 'PENDING' || jobStatus === 'OFFERED') {
@@ -105,9 +110,14 @@ async function runJobLifecycle(
       if (config.socialLinks) {
         coordBody += `\nOur socials: ${config.socialLinks}\n`;
       }
-      coordBody += `\nPayment: $${priceUsdc} USDC on ${config.paymentNetwork}.\n\n`
-        + 'Once you\'re done, share the links to your posts here and mark the job as complete. '
-        + 'I\'ll send payment right away!';
+      if (isUpfront) {
+        coordBody += `\nPayment: $${priceUsdc} USDC on ${config.paymentNetwork} — sending now (upfront).\n\n`
+          + 'Once you receive payment and finish the work, click "Mark Complete" on your dashboard.';
+      } else {
+        coordBody += `\nPayment: $${priceUsdc} USDC on ${config.paymentNetwork} upon completion.\n\n`
+          + 'Once you\'re done, share the links to your posts here and mark the job as complete. '
+          + 'I\'ll send payment right away!';
+      }
       const coordMsg = await sendMessage(jobId, coordBody);
       knownIds.add(coordMsg.id);
       console.log('  [Bot]: Sent promotion details.');
@@ -118,96 +128,168 @@ async function runJobLifecycle(
     jobStatus = 'ACCEPTED';
   }
 
-  // ── Phase: Pay ──
-  if (jobStatus === 'ACCEPTED') {
-    console.log('\nPayment...');
+  // ══════════════════════════════════════════════════════════
+  // UPFRONT FLOW: ACCEPTED → pay → PAID → human completes → COMPLETED → review
+  // ══════════════════════════════════════════════════════════
 
-    if (isPaymentConfigured()) {
-      try {
-        const account = await loadWalletAccount();
-        console.log(`  Wallet loaded: ${account.address}`);
-
-        const network = config.paymentNetwork;
-        const balance = await getUsdcBalance(account, network);
-        console.log(`  USDC balance on ${network}: ${balance}`);
-
-        if (parseFloat(balance) < priceUsdc) {
-          throw new Error(
-            `Insufficient USDC balance: ${balance} < ${priceUsdc}. `
-            + `Fund your wallet on ${network}.`,
-          );
-        }
-
-        let recipientAddress = await resolveRecipientWallet(humanId, humanName, network);
-
-        if (!recipientAddress) {
-          console.log('  No wallet address — skipping on-chain payment.');
-        } else {
-          console.log(`\n  Ready to send $${priceUsdc} USDC → ${recipientAddress} on ${network}`);
-
-          if (!await confirm('  Confirm payment?')) {
-            console.log('  Payment skipped by operator.');
-          } else {
-            console.log(`  Sending...`);
-            const txHash = await sendUsdc(account, recipientAddress, priceUsdc, network);
-            console.log(`  Confirmed: ${txHash}`);
-
-            const paid = await markJobPaid(jobId, {
-              paymentTxHash: txHash,
-              paymentNetwork: network,
-              paymentToken: 'USDC',
-              paymentAmount: priceUsdc,
-            });
-            console.log(`  Payment recorded on platform: ${paid.status}`);
-          }
-        }
-      } catch (err) {
-        console.log(`  Payment failed: ${(err as Error).message}`);
-      }
-    } else {
-      console.log('  No wallet configured.');
-      console.log('  To enable real payments:');
-      console.log('    npm run generate-keystore   (recommended)');
-      console.log('    or set WALLET_PRIVATE_KEY    (testing only)');
+  if (isUpfront) {
+    // ── Phase: Pay upfront ──
+    if (jobStatus === 'ACCEPTED') {
+      console.log('\nUpfront payment...');
+      await doPayment(jobId, humanId, humanName, priceUsdc);
+      jobStatus = 'PAID';
     }
 
+    // ── Phase: Wait for human to mark complete ──
+    if (jobStatus === 'PAID') {
+      console.log('\nWaiting for human to mark the job complete...');
+      console.log('  (Human needs to click "Mark Complete" on their dashboard)');
+      const completed = await waitForEventWithMessages(
+        jobId,
+        'job.completed',
+        knownIds,
+        onMessage,
+        WAIT_TIMEOUT_MS,
+      );
+      console.log(`  Job completed! (status: ${completed.status})`);
+      notify.jobCompleted(jobId, humanName);
+      jobStatus = 'COMPLETED';
+    }
+
+    // ── Phase: Review ──
+    if (jobStatus === 'COMPLETED') {
+      await doReview(jobId);
+    }
+
+    console.log('\n=== Marketing task complete ===\n');
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // UPON_COMPLETION FLOW: ACCEPTED → human submits → SUBMITTED → approve → COMPLETED → pay → PAID → review
+  // ══════════════════════════════════════════════════════════
+
+  // ── Phase: Wait for work submission ──
+  if (jobStatus === 'ACCEPTED' || jobStatus === 'SUBMITTED') {
+    if (jobStatus === 'ACCEPTED') {
+      console.log('\nWaiting for human to submit work for review...');
+      const submitted = await waitForEventWithMessages(
+        jobId,
+        'job.submitted',
+        knownIds,
+        onMessage,
+        WAIT_TIMEOUT_MS,
+      );
+      console.log(`  Work submitted! (status: ${submitted.status})`);
+      jobStatus = 'SUBMITTED';
+    }
+
+    if (jobStatus === 'SUBMITTED') {
+      console.log('\nReviewing submitted work...');
+      const approval = await ask('  Approve work? (y/n, default y): ');
+      if (approval && approval.toLowerCase() === 'n') {
+        const reason = await ask('  Revision reason: ');
+        await requestRevision(jobId, reason || 'Please review the task requirements and resubmit.');
+        console.log('  Revision requested — waiting for resubmission...');
+        jobStatus = 'ACCEPTED';
+        return runJobLifecycle(jobId, humanId, humanName, jobStatus, knownIds, priceUsdc, paymentTiming);
+      }
+
+      const approved = await approveCompletion(jobId);
+      console.log(`  Work approved! (status: ${approved.status})`);
+      notify.jobCompleted(jobId, humanName);
+      jobStatus = 'COMPLETED';
+    }
+  }
+
+  // ── Phase: Pay after completion ──
+  if (jobStatus === 'COMPLETED') {
+    console.log('\nPayment...');
+    await doPayment(jobId, humanId, humanName, priceUsdc);
     jobStatus = 'PAID';
   }
 
-  // ── Phase: Wait for completion ──
-  if (jobStatus === 'PAID') {
-    console.log('\nWaiting for human to complete the promotion...');
-    console.log('  (The human can message you while working)');
-
-    const completed = await waitForEventWithMessages(
-      jobId,
-      'job.completed',
-      knownIds,
-      onMessage,
-      WAIT_TIMEOUT_MS,
-    );
-
-    console.log(`  Promotion completed! (status: ${completed.status})`);
-    notify.jobCompleted(jobId, humanName);
-
-    jobStatus = 'COMPLETED';
-  }
-
   // ── Phase: Review ──
-  if (jobStatus === 'COMPLETED') {
-    console.log('\nLeaving a review...');
-    const rating = await ask('  Rating (1-5, default 5): ');
-    const ratingNum = rating ? parseInt(rating, 10) : 5;
-    const comment = await ask('  Comment (or Enter for default): ');
-
-    const review = await reviewJob(jobId, {
-      rating: ratingNum,
-      comment: comment || 'Great social media promotion — posted on time with quality content. Would hire again!',
-    });
-    console.log(`  Review submitted (rating: ${review.rating}/5)`);
+  if (jobStatus === 'PAID') {
+    await doReview(jobId);
   }
 
   console.log('\n=== Marketing task complete ===\n');
+}
+
+/**
+ * Shared payment logic used by both upfront and upon_completion flows.
+ */
+async function doPayment(
+  jobId: string,
+  humanId: string,
+  humanName: string,
+  priceUsdc: number,
+): Promise<void> {
+  if (isPaymentConfigured()) {
+    try {
+      const account = await loadWalletAccount();
+      console.log(`  Wallet loaded: ${account.address}`);
+
+      const network = config.paymentNetwork;
+      const balance = await getUsdcBalance(account, network);
+      console.log(`  USDC balance on ${network}: ${balance}`);
+
+      if (parseFloat(balance) < priceUsdc) {
+        throw new Error(
+          `Insufficient USDC balance: ${balance} < ${priceUsdc}. `
+          + `Fund your wallet on ${network}.`,
+        );
+      }
+
+      let recipientAddress = await resolveRecipientWallet(humanId, humanName, network);
+
+      if (!recipientAddress) {
+        console.log('  No wallet address — skipping on-chain payment.');
+      } else {
+        console.log(`\n  Ready to send $${priceUsdc} USDC → ${recipientAddress} on ${network}`);
+
+        if (!await confirm('  Confirm payment?')) {
+          console.log('  Payment skipped by operator.');
+        } else {
+          console.log(`  Sending...`);
+          const txHash = await sendUsdc(account, recipientAddress, priceUsdc, network);
+          console.log(`  Confirmed: ${txHash}`);
+
+          const paid = await markJobPaid(jobId, {
+            paymentTxHash: txHash,
+            paymentNetwork: network,
+            paymentToken: 'USDC',
+            paymentAmount: priceUsdc,
+          });
+          console.log(`  Payment recorded on platform: ${paid.status}`);
+        }
+      }
+    } catch (err) {
+      console.log(`  Payment failed: ${(err as Error).message}`);
+    }
+  } else {
+    console.log('  No wallet configured.');
+    console.log('  To enable real payments:');
+    console.log('    npm run generate-keystore   (recommended)');
+    console.log('    or set WALLET_PRIVATE_KEY    (testing only)');
+  }
+}
+
+/**
+ * Shared review logic.
+ */
+async function doReview(jobId: string): Promise<void> {
+  console.log('\nLeaving a review...');
+  const rating = await ask('  Rating (1-5, default 5): ');
+  const ratingNum = rating ? parseInt(rating, 10) : 5;
+  const comment = await ask('  Comment (or Enter for default): ');
+
+  const review = await reviewJob(jobId, {
+    rating: ratingNum,
+    comment: comment || 'Great social media promotion — posted on time with quality content. Would hire again!',
+  });
+  console.log(`  Review submitted (rating: ${review.rating}/5)`);
 }
 
 /**
@@ -254,9 +336,11 @@ export async function resumeBot(jobId: string): Promise<void> {
   const humanName = job.human?.name ?? 'Unknown';
   const humanId = job.humanId;
 
+  const paymentTiming = job.paymentTiming || 'upon_completion';
+  console.log(`  Payment timing: ${paymentTiming}`);
   console.log(`\nResuming from status: ${job.status}`);
 
-  await runJobLifecycle(jobId, humanId, humanName, job.status, knownIds, parseFloat(job.priceUsdc));
+  await runJobLifecycle(jobId, humanId, humanName, job.status, knownIds, parseFloat(job.priceUsdc), paymentTiming);
 }
 
 /**
@@ -347,6 +431,7 @@ export async function runBot(humanId: string): Promise<void> {
     title: 'Social media promotion — share & post',
     description: config.errandDescription,
     priceUsdc: config.jobPriceUsdc,
+    paymentTiming: 'upon_completion',
     ...(callbackUrl && {
       callbackUrl,
       callbackSecret: config.webhookSecret,
@@ -378,7 +463,7 @@ export async function runBot(humanId: string): Promise<void> {
   }
 
   // Hand off to the shared lifecycle
-  await runJobLifecycle(job.id, candidate.id, candidateName, 'PENDING', knownIds, config.jobPriceUsdc);
+  await runJobLifecycle(job.id, candidate.id, candidateName, 'PENDING', knownIds, config.jobPriceUsdc, 'upon_completion');
 }
 
 /**

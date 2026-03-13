@@ -55,8 +55,10 @@ See [Connecting an LLM](#connecting-an-llm) for all options.
 The bot demonstrates the full Human Pages REST API lifecycle:
 
 ```
-Register → Fetch human → Offer → Message → Wait for acceptance → Pay → Wait for completion → Review
+Register → Search/Fetch human → Offer → Message → Wait for acceptance → Pay → Wait for completion → Review
 ```
+
+> **Tip:** If no humans match your search, post a job listing on the Human Pages job board via `POST /api/listings` and let qualified humans come to you. See the [marketing-bot](../marketing-bot/) for an example with `--post-listing`.
 
 ### Step-by-Step
 

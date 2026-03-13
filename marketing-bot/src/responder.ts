@@ -211,7 +211,7 @@ function keywordFallback(msg: Message, jobDescription: string): string {
     return 'No hard deadline — anytime this week works. Just let me know when you post!';
   }
   if (lower.includes('price') || lower.includes('pay') || lower.includes('money') || lower.includes('rate') || lower.includes('usdc')) {
-    return `The payment is $${config.jobPriceUsdc} USDC on ${config.paymentNetwork}, sent to your wallet as soon as you accept.`;
+    return `The payment is $${config.jobPriceUsdc} USDC on ${config.paymentNetwork}, sent upon completion.`;
   }
   if (lower.includes('hello') || lower.includes('hi') || lower.includes('hey')) {
     return `Hi ${msg.senderName}! Thanks for your interest in promoting ${config.projectName}. Feel free to ask any questions, or hit Accept when you're ready!`;
@@ -220,5 +220,5 @@ function keywordFallback(msg: Message, jobDescription: string): string {
     return `Good question! Here are the full details: ${jobDescription} — Payment is $${config.jobPriceUsdc} USDC on ${config.paymentNetwork}. Let me know if anything else is unclear.`;
   }
 
-  return `Thanks for the message, ${msg.senderName}! The promotion details are in the job description. Accept when you're ready and I'll send payment right away.`;
+  return `Thanks for the message, ${msg.senderName}! The promotion details are in the job description. Accept when you're ready — payment is sent upon completion.`;
 }

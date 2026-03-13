@@ -63,6 +63,7 @@ export interface Job {
   title: string;
   description: string;
   priceUsdc: string;
+  paymentTiming?: 'upfront' | 'upon_completion';
   humanId: string;
   human?: { id: string; name: string };
 }
@@ -146,6 +147,10 @@ export type WebhookEvent =
   | 'job.rejected'
   | 'job.paid'
   | 'job.completed'
+  | 'job.submitted'
+  | 'job.revision_requested'
+  | 'job.cancelled'
+  | 'job.disputed'
   | 'job.message';
 
 export interface WebhookPayload {

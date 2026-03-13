@@ -9,6 +9,7 @@ import type { Message, WebhookEvent, WebhookPayload } from './types.js';
 const EVENT_TO_STATUS: Record<string, string> = {
   'job.accepted': 'ACCEPTED',
   'job.rejected': 'REJECTED',
+  'job.submitted': 'SUBMITTED',
   'job.paid': 'PAID',
   'job.completed': 'COMPLETED',
 };
