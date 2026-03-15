@@ -353,25 +353,3 @@ async function sendUsdcCdp(
   return result.transactionHash;
 }
 
-// ── Deprecated exports — use loadWallet(), checkBalance(), pay() instead ──
-
-/** @deprecated Use loadWallet() instead. */
-export async function loadWalletAccount(): Promise<Account> {
-  throw new Error(
-    'loadWalletAccount() is deprecated. Use loadWallet() which returns a WalletHandle supporting both CDP and private key wallets.',
-  );
-}
-
-/** @deprecated Use checkBalance() instead. */
-export async function getUsdcBalance(_account: Account, _network: string): Promise<string> {
-  throw new Error(
-    'getUsdcBalance() is deprecated. Use checkBalance(wallet, network) instead.',
-  );
-}
-
-/** @deprecated Use pay() instead — it enforces guardrails (caps, allowlist, approval). */
-export async function sendUsdc(_account: Account, _toAddress: string, _amount: number, _network: string): Promise<string> {
-  throw new Error(
-    'sendUsdc() is deprecated — it bypasses all payment guardrails. Use pay(wallet, toAddress, amount, network) instead.',
-  );
-}
