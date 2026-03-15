@@ -1,17 +1,15 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
-import * as readline from 'node:readline/promises';
 import { config } from './config.js';
 
 // ── Payment Guardrails ──
 // Enforced inside pay() — every payment goes through these checks.
 // Cannot be bypassed by calling pay() directly.
+// Your wallet balance is the real spending cap — only fund what you're willing to spend.
 
 export interface GuardrailConfig {
   maxPerTransaction: number;
   maxDailySpend: number;
   allowedRecipients: Set<string>;
-  requireApprovalAbove: number;
-  approvalTimeoutMs: number;
 }
 
 interface LedgerEntry {
@@ -27,7 +25,7 @@ interface LedgerFile {
 
 // ── Audit log entry types ──
 
-type AuditDecision = 'ALLOWED' | 'BLOCKED' | 'APPROVED' | 'DENIED' | 'TIMEOUT' | 'DRY_RUN' | 'RECORDED';
+type AuditDecision = 'ALLOWED' | 'BLOCKED' | 'DRY_RUN' | 'RECORDED';
 
 interface AuditEntry {
   timestamp: string;
@@ -45,8 +43,6 @@ const guardrailConfig: GuardrailConfig = {
   maxPerTransaction: config.maxPerTransaction,
   maxDailySpend: config.maxDailySpend,
   allowedRecipients: new Set<string>(),
-  requireApprovalAbove: config.requireApprovalAbove,
-  approvalTimeoutMs: config.approvalTimeoutMs,
 };
 
 // ── Structured audit logging ──
@@ -69,7 +65,7 @@ function audit(decision: AuditDecision, rule: string, amount: number, recipient:
   }
 
   // Console output with decision prefix
-  const symbol = decision === 'ALLOWED' || decision === 'APPROVED' || decision === 'RECORDED' ? '+' : '-';
+  const symbol = decision === 'ALLOWED' || decision === 'RECORDED' ? '+' : '-';
   console.log(`  [AUDIT ${symbol}${decision}] ${rule}: $${amount} → ${recipient.slice(0, 10)}... — ${details}`);
 }
 
@@ -117,6 +113,12 @@ export function getDailySpend(): number {
  * Called automatically by pay() — callers do not need to call this separately.
  */
 export function enforceGuardrails(amount: number, recipientAddress: string): void {
+  // 0. Reject invalid amounts
+  if (amount <= 0) {
+    audit('BLOCKED', 'invalid-amount', amount, recipientAddress, 'Amount must be greater than zero');
+    throw new Error(`GUARDRAIL: Invalid payment amount: $${amount}. Must be greater than zero.`);
+  }
+
   // 1. Hard cap per transaction
   if (amount > guardrailConfig.maxPerTransaction) {
     audit('BLOCKED', 'per-tx-cap', amount, recipientAddress,
@@ -150,57 +152,6 @@ export function enforceGuardrails(amount: number, recipientAddress: string): voi
 
   audit('ALLOWED', 'all-checks', amount, recipientAddress,
     `Per-tx OK ($${amount}/$${guardrailConfig.maxPerTransaction}), daily OK ($${dailySoFar + amount}/$${guardrailConfig.maxDailySpend}), allowlist OK`);
-}
-
-/**
- * Returns true if the amount exceeds the approval threshold.
- */
-export function requiresApproval(amount: number): boolean {
-  return amount > guardrailConfig.requireApprovalAbove;
-}
-
-/**
- * Prompt the operator for approval with a timeout.
- * - If stdin is not a TTY (cron, Docker, cloud): auto-deny immediately.
- * - If TTY: prompt with configurable timeout (default 30s), auto-deny on timeout.
- */
-export async function promptForApproval(amount: number, recipient: string): Promise<boolean> {
-  // Non-interactive environment: auto-deny
-  if (!process.stdin.isTTY) {
-    audit('DENIED', 'approval-no-tty', amount, recipient,
-      'Non-interactive environment (no TTY) — auto-denied');
-    return false;
-  }
-
-  const timeoutMs = guardrailConfig.approvalTimeoutMs;
-
-  return new Promise<boolean>((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-    const timer = setTimeout(() => {
-      rl.close();
-      audit('TIMEOUT', 'approval-timeout', amount, recipient,
-        `No response within ${timeoutMs / 1000}s — auto-denied`);
-      resolve(false);
-    }, timeoutMs);
-
-    rl.question(
-      `\n  GUARDRAIL: Payment of $${amount} USDC to ${recipient} exceeds $${guardrailConfig.requireApprovalAbove} approval threshold.\n` +
-      `  Approve this payment? (yes/no, ${timeoutMs / 1000}s timeout): `,
-    ).then((answer) => {
-      clearTimeout(timer);
-      rl.close();
-      const approved = answer.trim().toLowerCase() === 'yes';
-      audit(approved ? 'APPROVED' : 'DENIED', 'approval-prompt', amount, recipient,
-        approved ? 'Operator approved' : 'Operator denied');
-      resolve(approved);
-    }).catch(() => {
-      clearTimeout(timer);
-      rl.close();
-      audit('DENIED', 'approval-error', amount, recipient, 'Prompt failed — auto-denied');
-      resolve(false);
-    });
-  });
 }
 
 /**

@@ -14,7 +14,7 @@ import * as readline from 'node:readline/promises';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { config } from './config.js';
-import { enforceGuardrails, requiresApproval, promptForApproval, recordTransaction } from './guardrails.js';
+import { enforceGuardrails, recordTransaction } from './guardrails.js';
 
 // ── Network → chain + RPC mapping ──
 
@@ -177,10 +177,12 @@ export async function checkBalance(wallet: WalletHandle, network: string): Promi
  * Send USDC to a recipient with guardrails enforced.
  *
  * Guardrails are checked INSIDE this function — they cannot be bypassed:
- *   1. Per-transaction cap (hard block)
- *   2. Daily spend limit (rolling 24h)
- *   3. Recipient allowlist (fail-closed: empty = deny all)
- *   4. Operator approval for large amounts (with timeout + TTY detection)
+ *   1. Amount validation (must be > 0)
+ *   2. Per-transaction cap (hard block)
+ *   3. Daily spend limit (rolling 24h)
+ *   4. Recipient allowlist (fail-closed: empty = deny all)
+ *
+ * Your wallet balance is the real spending cap — only fund what you're willing to spend.
  *
  * After successful payment, the transaction is recorded in the guardrails ledger.
  *
@@ -194,17 +196,7 @@ export async function pay(
   options: PayOptions = {},
 ): Promise<string> {
   // ── Guardrails: enforced here, no opt-out ──
-
-  // 1-3: Per-tx cap, daily limit, allowlist (throws if blocked)
   enforceGuardrails(amount, toAddress);
-
-  // 4: Operator approval for large amounts
-  if (requiresApproval(amount)) {
-    const approved = await promptForApproval(amount, toAddress);
-    if (!approved) {
-      throw new Error('GUARDRAIL: Payment rejected — operator denied or approval timed out.');
-    }
-  }
 
   // Dry run: all checks passed, return without sending
   if (options.dryRun) {

@@ -170,7 +170,11 @@ export async function runBot(humanId: string): Promise<void> {
   }
 
   // ── Step 8: Record payment ──
+  // Payment timing is flexible — agents and humans can agree on upfront or upon completion.
+  // This demo pays upfront after acceptance. Use markJobPaid() after completion for pay-on-delivery.
   console.log('\nStep 8: Recording payment...');
+
+  let paymentSucceeded = false;
 
   if (isPaymentConfigured()) {
     // Real on-chain USDC payment
@@ -215,9 +219,9 @@ export async function runBot(humanId: string): Promise<void> {
         paymentAmount: config.jobPriceUsdc,
       });
       console.log(`  Payment recorded: ${paid.status}`);
+      paymentSucceeded = true;
     } catch (err) {
       console.log(`  Payment failed: ${(err as Error).message}`);
-      console.log('  Continuing to demonstrate remaining steps...');
     }
   } else {
     // Demo mode — no wallet configured
@@ -233,10 +237,17 @@ export async function runBot(humanId: string): Promise<void> {
         paymentAmount: config.jobPriceUsdc,
       });
       console.log(`  Payment recorded: ${paid.status}`);
+      paymentSucceeded = true;
     } catch (err) {
       console.log(`  Payment recording failed (expected with demo tx): ${(err as Error).message}`);
-      console.log('  Continuing to demonstrate remaining steps...');
     }
+  }
+
+  if (!paymentSucceeded) {
+    console.log('\n  Payment was not recorded — skipping completion wait.');
+    console.log('  Configure a wallet and fund it with USDC to complete the full flow.');
+    console.log('\n=== Errand complete (partial — no payment) ===\n');
+    return;
   }
 
   // ── Step 9: Wait for completion (while responding to messages) ──
@@ -275,7 +286,6 @@ export async function runBot(humanId: string): Promise<void> {
     console.log(`  Review submitted (rating: ${review.rating}/5)`);
   } catch (err) {
     console.log(`  ${(err as Error).message}`);
-    console.log('  (Expected if payment was not recorded on-chain)');
   }
 
   console.log('\n=== Errand complete ===\n');

@@ -63,11 +63,9 @@ export const config = {
   cdpWalletSecret: process.env.CDP_WALLET_SECRET || '',
   cdpWalletName: optional('CDP_WALLET_NAME', 'errand-bot'),
 
-  // Guardrails
+  // Guardrails (your wallet balance is the real cap — only fund what you're willing to spend)
   maxPerTransaction: parseFloat(optional('MAX_PER_TRANSACTION', '100')),
   maxDailySpend: parseFloat(optional('MAX_DAILY_SPEND', '500')),
-  requireApprovalAbove: parseFloat(optional('REQUIRE_APPROVAL_ABOVE', '100')),
-  approvalTimeoutMs: parseInt(optional('APPROVAL_TIMEOUT_MS', '30000'), 10),
 
   // Errand params
   errandDescription: optional(
