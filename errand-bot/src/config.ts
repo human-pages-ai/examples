@@ -57,6 +57,17 @@ export const config = {
   walletPrivateKey: process.env.WALLET_PRIVATE_KEY || '',
   paymentNetwork: optional('PAYMENT_NETWORK', 'base-sepolia'),
 
+  // CDP wallet (alternative to raw private key — keys stay in Coinbase secure enclaves)
+  cdpApiKeyId: process.env.CDP_API_KEY_ID || '',
+  cdpApiKeySecret: process.env.CDP_API_KEY_SECRET || '',
+  cdpWalletSecret: process.env.CDP_WALLET_SECRET || '',
+  cdpWalletName: optional('CDP_WALLET_NAME', 'errand-bot'),
+
+  // Guardrails
+  maxPerTransaction: parseFloat(optional('MAX_PER_TRANSACTION', '50')),
+  maxDailySpend: parseFloat(optional('MAX_DAILY_SPEND', '100')),
+  requireApprovalAbove: parseFloat(optional('REQUIRE_APPROVAL_ABOVE', '25')),
+
   // Errand params
   errandDescription: optional(
     'ERRAND_DESCRIPTION',

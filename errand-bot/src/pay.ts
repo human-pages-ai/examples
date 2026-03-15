@@ -81,55 +81,123 @@ const ERC20_ABI = [
 
 const KEYSTORE_PATH = new URL('../keystore.json', import.meta.url).pathname;
 
+// ── Unified wallet handle ──
+
+export type WalletHandle =
+  | { type: 'viem'; account: Account }
+  | { type: 'cdp'; account: CdpAccount };
+
+// CDP account type (from @coinbase/cdp-sdk)
+type CdpAccount = Awaited<ReturnType<Awaited<ReturnType<typeof getCdpClient>>['evm']['getOrCreateAccount']>>;
+
+// Lazy CDP client singleton
+let _cdpClient: any = null;
+
+async function getCdpClient() {
+  if (!_cdpClient) {
+    const { CdpClient } = await import('@coinbase/cdp-sdk');
+    _cdpClient = new CdpClient({
+      apiKeyId: config.cdpApiKeyId,
+      apiKeySecret: config.cdpApiKeySecret,
+      walletSecret: config.cdpWalletSecret,
+    });
+  }
+  return _cdpClient;
+}
+
 // ── Wallet loading ──
 
 /**
- * Check whether payment is configured (keystore file exists OR env var set).
+ * Check whether payment is configured (CDP, keystore, or env var).
  */
 export function isPaymentConfigured(): boolean {
-  return existsSync(KEYSTORE_PATH) || !!config.walletPrivateKey;
+  return !!config.cdpApiKeyId || existsSync(KEYSTORE_PATH) || !!config.walletPrivateKey;
 }
 
 /**
- * Load the wallet account.
- * Priority: keystore.json (prompts for password) → WALLET_PRIVATE_KEY env var.
+ * Load the wallet.
+ * Priority:
+ *   1. CDP wallet (if CDP_API_KEY_ID is set) — keys in secure enclaves
+ *   2. Encrypted keystore (if keystore.json exists)
+ *   3. WALLET_PRIVATE_KEY env var
  */
-export async function loadWalletAccount(): Promise<Account> {
-  // Try keystore first
-  if (existsSync(KEYSTORE_PATH)) {
-    console.log('  Loading wallet from keystore.json...');
-    const keystoreJson = await readFile(KEYSTORE_PATH, 'utf-8');
-    const keystore = JSON.parse(keystoreJson);
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const password = await rl.question('  Enter keystore password: ');
-    rl.close();
-
-    // Dynamic import of ox (transitive dep of viem)
-    const { Keystore } = await import('ox');
-    const key = Keystore.toKey(keystore, { password });
-    const privateKey = Keystore.decrypt(keystore, key) as `0x${string}`;
-    return privateKeyToAccount(privateKey);
+export async function loadWallet(): Promise<WalletHandle> {
+  // 1. CDP wallet
+  if (config.cdpApiKeyId) {
+    console.log('  Loading CDP wallet (keys in Coinbase secure enclaves)...');
+    const cdp = await getCdpClient();
+    const account = await cdp.evm.getOrCreateAccount({ name: config.cdpWalletName });
+    console.log(`  CDP wallet: ${account.address}`);
+    return { type: 'cdp', account };
   }
 
-  // Fall back to env var
+  // 2. Keystore
+  if (existsSync(KEYSTORE_PATH)) {
+    const account = await loadKeystoreAccount();
+    return { type: 'viem', account };
+  }
+
+  // 3. Env var
   if (config.walletPrivateKey) {
     const key = config.walletPrivateKey.startsWith('0x')
       ? config.walletPrivateKey as `0x${string}`
       : `0x${config.walletPrivateKey}` as `0x${string}`;
-    return privateKeyToAccount(key);
+    return { type: 'viem', account: privateKeyToAccount(key) };
   }
 
-  throw new Error('No wallet configured. Set WALLET_PRIVATE_KEY or run: npm run generate-keystore');
+  throw new Error('No wallet configured. Set CDP_API_KEY_ID, WALLET_PRIVATE_KEY, or run: npm run generate-keystore');
 }
 
 /**
- * Get USDC balance for the bot's wallet on the given network.
+ * Get the wallet address from a WalletHandle.
  */
-export async function getUsdcBalance(
-  account: Account,
+export function getAddress(wallet: WalletHandle): string {
+  return wallet.account.address;
+}
+
+/**
+ * Get USDC balance for the wallet on the given network.
+ */
+export async function checkBalance(wallet: WalletHandle, network: string): Promise<string> {
+  if (wallet.type === 'cdp') {
+    return getUsdcBalanceCdp(wallet.account, network);
+  }
+  return getUsdcBalanceViem(wallet.account, network);
+}
+
+/**
+ * Send USDC to a recipient. Returns the confirmed transaction hash.
+ */
+export async function pay(
+  wallet: WalletHandle,
+  toAddress: string,
+  amount: number,
   network: string,
 ): Promise<string> {
+  if (wallet.type === 'cdp') {
+    return sendUsdcCdp(wallet.account, toAddress, amount, network);
+  }
+  return sendUsdcViem(wallet.account, toAddress, amount, network);
+}
+
+// ── Viem (keystore / private key) implementations ──
+
+async function loadKeystoreAccount(): Promise<Account> {
+  console.log('  Loading wallet from keystore.json...');
+  const keystoreJson = await readFile(KEYSTORE_PATH, 'utf-8');
+  const keystore = JSON.parse(keystoreJson);
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const password = await rl.question('  Enter keystore password: ');
+  rl.close();
+
+  const { Keystore } = await import('ox');
+  const key = Keystore.toKey(keystore, { password });
+  const privateKey = Keystore.decrypt(keystore, key) as `0x${string}`;
+  return privateKeyToAccount(privateKey);
+}
+
+async function getUsdcBalanceViem(account: Account, network: string): Promise<string> {
   const net = NETWORKS[network];
   if (!net) throw new Error(`Unsupported network: ${network}`);
 
@@ -151,11 +219,7 @@ export async function getUsdcBalance(
   return formatUnits(balance, USDC_DECIMALS);
 }
 
-/**
- * Send USDC to a recipient on the specified network.
- * Returns the confirmed transaction hash.
- */
-export async function sendUsdc(
+async function sendUsdcViem(
   account: Account,
   toAddress: string,
   amount: number,
@@ -180,14 +244,12 @@ export async function sendUsdc(
     transport: http(net.rpcs[0]),
   });
 
-  // Encode the ERC-20 transfer call
   const data = encodeFunctionData({
     abi: ERC20_ABI,
     functionName: 'transfer',
     args: [toAddress as `0x${string}`, amountWei],
   });
 
-  // Send the transaction
   const txHash = await walletClient.sendTransaction({
     to: usdcAddress,
     data,
@@ -196,7 +258,6 @@ export async function sendUsdc(
   console.log(`  Tx sent: ${txHash}`);
   console.log('  Waiting for confirmation...');
 
-  // Wait for receipt
   const receipt = await publicClient.waitForTransactionReceipt({
     hash: txHash,
     confirmations: 2,
@@ -207,4 +268,62 @@ export async function sendUsdc(
   }
 
   return txHash;
+}
+
+// ── CDP implementations ──
+
+async function getUsdcBalanceCdp(account: CdpAccount, network: string): Promise<string> {
+  const cdp = await getCdpClient();
+  const result = await cdp.evm.listTokenBalances({
+    address: account.address,
+    network: network as 'base',
+  });
+
+  for (const b of result.balances) {
+    if (b.token.symbol?.toUpperCase() === 'USDC') {
+      return formatUnits(b.amount.amount, b.amount.decimals);
+    }
+  }
+
+  return '0';
+}
+
+async function sendUsdcCdp(
+  account: CdpAccount,
+  toAddress: string,
+  amountUsdc: number,
+  _network: string,
+): Promise<string> {
+  const result = await account.transfer({
+    to: toAddress as `0x${string}`,
+    amount: parseUnits(amountUsdc.toFixed(6), 6),
+    token: 'usdc',
+    network: config.paymentNetwork as 'base',
+  });
+
+  console.log(`  Tx sent: ${result.transactionHash}`);
+  return result.transactionHash;
+}
+
+// ── Legacy exports (backwards compatibility) ──
+
+export async function loadWalletAccount(): Promise<Account> {
+  if (existsSync(KEYSTORE_PATH)) {
+    return loadKeystoreAccount();
+  }
+  if (config.walletPrivateKey) {
+    const key = config.walletPrivateKey.startsWith('0x')
+      ? config.walletPrivateKey as `0x${string}`
+      : `0x${config.walletPrivateKey}` as `0x${string}`;
+    return privateKeyToAccount(key);
+  }
+  throw new Error('No wallet configured. Set WALLET_PRIVATE_KEY or run: npm run generate-keystore');
+}
+
+export async function getUsdcBalance(account: Account, network: string): Promise<string> {
+  return getUsdcBalanceViem(account, network);
+}
+
+export async function sendUsdc(account: Account, toAddress: string, amount: number, network: string): Promise<string> {
+  return sendUsdcViem(account, toAddress, amount, network);
 }

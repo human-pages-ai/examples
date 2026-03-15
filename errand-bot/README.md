@@ -104,14 +104,47 @@ All configuration is via environment variables (see `.env.example`):
 | `WEBHOOK_SECRET` | Shared secret for HMAC-SHA256 signature verification |
 | `ERRAND_DESCRIPTION` | What the human needs to do in the physical world |
 | `JOB_PRICE_USDC` | Price offered in USDC |
-| `WALLET_PRIVATE_KEY` | Wallet private key for USDC payments (optional) |
+| `CDP_API_KEY_ID` | Coinbase Developer Platform API key ID (recommended wallet option) |
+| `CDP_API_KEY_SECRET` | CDP API key secret |
+| `CDP_WALLET_SECRET` | CDP wallet encryption secret |
+| `CDP_WALLET_NAME` | CDP wallet name (default: `errand-bot`) |
+| `WALLET_PRIVATE_KEY` | Wallet private key for USDC payments (alternative to CDP) |
 | `PAYMENT_NETWORK` | Blockchain network for payments (default: `base-sepolia`) |
+| `MAX_PER_TRANSACTION` | Guardrail: max USDC per payment (default: `50`) |
+| `MAX_DAILY_SPEND` | Guardrail: max USDC per 24h (default: `100`) |
+| `REQUIRE_APPROVAL_ABOVE` | Guardrail: prompt operator above this amount (default: `25`) |
 
 ## Payment
 
 The bot can send real USDC on-chain to pay humans. Without a wallet configured, it runs in demo mode with a placeholder transaction.
 
-### Testnet Setup (Recommended First Step)
+### Wallet Options
+
+| Option | Private key on disk? | Setup | Best for |
+|--------|---------------------|-------|----------|
+| **CDP wallet** (recommended) | No — keys in Coinbase secure enclaves | 3 env vars from [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com) | Production, autonomous bots |
+| **Encrypted keystore** | Encrypted (password at startup) | `npm run generate-keystore` | Mainnet with manual oversight |
+| **Raw private key** | Yes (plaintext in `.env`) | `WALLET_PRIVATE_KEY=0x...` | Testnet, local dev |
+
+The bot auto-detects which wallet to use in priority order: CDP > keystore > env var.
+
+### CDP Wallet Setup (Recommended)
+
+CDP (Coinbase Developer Platform) wallets keep private keys in Coinbase's secure enclaves. Your bot never touches a raw private key.
+
+1. **Create API credentials** at [portal.cdp.coinbase.com](https://portal.cdp.coinbase.com)
+2. **Add to `.env`**:
+   ```bash
+   CDP_API_KEY_ID=your-key-id
+   CDP_API_KEY_SECRET=your-key-secret
+   CDP_WALLET_SECRET=your-wallet-secret
+   CDP_WALLET_NAME=errand-bot
+   ```
+3. **Fund the wallet** — run the bot once to see the wallet address, then send USDC + gas to it.
+
+The wallet is persistent: same `CDP_WALLET_NAME` gives the same address every time.
+
+### Testnet Setup (Raw Key)
 
 1. **Get a wallet** — any Ethereum wallet (MetaMask, etc.). Export the private key.
 2. **Get testnet ETH** — visit [Base Sepolia Faucet](https://www.alchemy.com/faucets/base-sepolia) for gas.
@@ -122,25 +155,12 @@ The bot can send real USDC on-chain to pay humans. Without a wallet configured, 
    PAYMENT_NETWORK=base-sepolia
    ```
 
-### Key Security Options
+### Encrypted Keystore
 
-**Option 1: Environment variable** (simple, fine for testnet)
-```bash
-WALLET_PRIVATE_KEY=0xYourPrivateKeyHere
-```
-
-**Option 2: Encrypted keystore** (recommended for mainnet)
 ```bash
 npm run generate-keystore
 # Prompts for private key + password → writes keystore.json
 # At startup the bot prompts for password — key never on disk in plaintext
-```
-
-**Option 3: 1Password CLI** (if you use 1Password)
-```bash
-# Store the key in 1Password, then:
-op run --env-file=.env -- npx tsx src/index.ts <humanId>
-# 1Password injects secrets at runtime
 ```
 
 ### Switching to Mainnet
@@ -155,14 +175,30 @@ Change `PAYMENT_NETWORK` to the desired network and fund your wallet with real U
 | Arbitrum | `arbitrum` |
 | Base Sepolia (testnet) | `base-sepolia` |
 
+### Security Guardrails
+
+Every payment goes through code-enforced guardrails before it reaches the chain. These are not documentation-only promises -- they are runtime checks that block transactions.
+
+| Guardrail | Default | Env var | Behavior |
+|-----------|---------|---------|----------|
+| **Max per transaction** | $50 | `MAX_PER_TRANSACTION` | Hard block, no override |
+| **Daily spend limit** | $100/24h | `MAX_DAILY_SPEND` | Hard block, resets on rolling 24h window |
+| **Recipient allowlist** | API-only | (automatic) | Only addresses fetched from Human Pages API |
+| **Approval prompt** | >$25 | `REQUIRE_APPROVAL_ABOVE` | Operator must type "yes" on stdin |
+
+Transactions are logged to `.guardrails-ledger.json` with timestamp, amount, recipient, and tx hash.
+
 ### How It Works
 
-When a wallet is configured, Step 7 of the bot lifecycle:
-1. Loads your wallet (keystore or env var)
+When a wallet is configured, Step 8 of the bot lifecycle:
+1. Loads your wallet (CDP, keystore, or env var)
 2. Checks your USDC balance on the payment network
 3. Looks up the human's wallet address for that network
-4. Sends an ERC-20 USDC `transfer()` on-chain
-5. Waits for confirmation and reports the real tx hash to the platform
+4. Runs guardrail checks (amount limits, daily cap, recipient allowlist)
+5. Prompts for approval if above threshold
+6. Sends USDC on-chain (ERC-20 transfer for viem, native transfer for CDP)
+7. Records the transaction in the guardrails ledger
+8. Reports the confirmed tx hash to the platform
 
 ## Project Structure
 
@@ -171,7 +207,8 @@ src/
 ├── config.ts      — Environment variable loading and validation
 ├── types.ts       — TypeScript interfaces for API responses and webhooks
 ├── api.ts         — Human Pages API client (fetch + retry with backoff)
-├── pay.ts         — On-chain USDC payment (viem + keystore/env wallet)
+├── pay.ts         — On-chain USDC payment (CDP wallet or viem + keystore/env)
+├── guardrails.ts  — Payment guardrails (spend limits, allowlist, approval prompts)
 ├── responder.ts   — LLM reply generation (any provider or keyword fallback)
 ├── notify.ts      — Owner Telegram notifications
 ├── webhook.ts     — Webhook server + polling fallback for status & messages

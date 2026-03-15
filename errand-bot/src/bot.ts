@@ -13,7 +13,8 @@ import {
 import { waitForEvent, waitForEventWithMessages } from './webhook.js';
 import { generateReply, getResponderName } from './responder.js';
 import { notify, isOwnerNotifyConfigured } from './notify.js';
-import { isPaymentConfigured, loadWalletAccount, getUsdcBalance, sendUsdc } from './pay.js';
+import { isPaymentConfigured, loadWallet, checkBalance, pay, getAddress } from './pay.js';
+import { checkTransaction, recordTransaction, addAllowedRecipient, requiresApproval, promptForApproval } from './guardrails.js';
 
 /**
  * Main bot lifecycle — demonstrates how an AI agent hires a real human
@@ -174,11 +175,12 @@ export async function runBot(humanId: string): Promise<void> {
   if (isPaymentConfigured()) {
     // Real on-chain USDC payment
     try {
-      const account = await loadWalletAccount();
-      console.log(`  Wallet loaded: ${account.address}`);
+      const walletHandle = await loadWallet();
+      const walletAddress = getAddress(walletHandle);
+      console.log(`  Wallet loaded: ${walletAddress}`);
 
       const network = config.paymentNetwork;
-      const balance = await getUsdcBalance(account, network);
+      const balance = await checkBalance(walletHandle, network);
       console.log(`  USDC balance on ${network}: ${balance}`);
 
       if (parseFloat(balance) < config.jobPriceUsdc) {
@@ -190,17 +192,34 @@ export async function runBot(humanId: string): Promise<void> {
 
       // Fetch full profile (gated endpoint) for wallet addresses
       const human = await getHumanProfile(candidate.id);
-      const wallet = human.wallets?.find((w) => w.network === network);
-      if (!wallet) {
+      const humanWallet = human.wallets?.find((w: any) => w.network === network);
+      if (!humanWallet) {
         throw new Error(
           `Human has no wallet on ${network}. `
           + `Ask them to add a ${network} wallet on their profile.`,
         );
       }
 
-      console.log(`  Sending $${config.jobPriceUsdc} USDC to ${wallet.address} on ${network}...`);
-      const txHash = await sendUsdc(account, wallet.address, config.jobPriceUsdc, network);
+      // Register the human's wallet as an allowed recipient
+      addAllowedRecipient(humanWallet.address);
+
+      // Guardrail checks
+      checkTransaction(config.jobPriceUsdc, humanWallet.address);
+
+      // Human approval for large payments
+      if (requiresApproval(config.jobPriceUsdc)) {
+        const approved = await promptForApproval(config.jobPriceUsdc, humanWallet.address);
+        if (!approved) {
+          throw new Error('Payment rejected by operator.');
+        }
+      }
+
+      console.log(`  Sending $${config.jobPriceUsdc} USDC to ${humanWallet.address} on ${network}...`);
+      const txHash = await pay(walletHandle, humanWallet.address, config.jobPriceUsdc, network);
       console.log(`  Confirmed: ${txHash}`);
+
+      // Record in guardrails ledger
+      recordTransaction(config.jobPriceUsdc, humanWallet.address, txHash);
 
       const paid = await markJobPaid(job.id, {
         paymentTxHash: txHash,
