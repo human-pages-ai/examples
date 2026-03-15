@@ -14,7 +14,7 @@ import { waitForEvent, waitForEventWithMessages } from './webhook.js';
 import { generateReply, getResponderName } from './responder.js';
 import { notify, isOwnerNotifyConfigured } from './notify.js';
 import { isPaymentConfigured, loadWallet, checkBalance, pay, getAddress } from './pay.js';
-import { checkTransaction, recordTransaction, addAllowedRecipient, requiresApproval, promptForApproval } from './guardrails.js';
+import { addAllowedRecipient } from './guardrails.js';
 
 /**
  * Main bot lifecycle — demonstrates how an AI agent hires a real human
@@ -200,26 +200,13 @@ export async function runBot(humanId: string): Promise<void> {
         );
       }
 
-      // Register the human's wallet as an allowed recipient
+      // Register the human's wallet as an allowed recipient (must be done before pay)
       addAllowedRecipient(humanWallet.address);
 
-      // Guardrail checks
-      checkTransaction(config.jobPriceUsdc, humanWallet.address);
-
-      // Human approval for large payments
-      if (requiresApproval(config.jobPriceUsdc)) {
-        const approved = await promptForApproval(config.jobPriceUsdc, humanWallet.address);
-        if (!approved) {
-          throw new Error('Payment rejected by operator.');
-        }
-      }
-
+      // pay() enforces all guardrails internally: per-tx cap, daily limit, allowlist, approval prompt
       console.log(`  Sending $${config.jobPriceUsdc} USDC to ${humanWallet.address} on ${network}...`);
       const txHash = await pay(walletHandle, humanWallet.address, config.jobPriceUsdc, network);
       console.log(`  Confirmed: ${txHash}`);
-
-      // Record in guardrails ledger
-      recordTransaction(config.jobPriceUsdc, humanWallet.address, txHash);
 
       const paid = await markJobPaid(job.id, {
         paymentTxHash: txHash,

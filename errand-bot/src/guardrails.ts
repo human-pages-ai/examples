@@ -1,15 +1,17 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import * as readline from 'node:readline/promises';
 import { config } from './config.js';
 
 // ── Payment Guardrails ──
-// Enforced in code, not just documented. Every payment goes through these checks.
+// Enforced inside pay() — every payment goes through these checks.
+// Cannot be bypassed by calling pay() directly.
 
 export interface GuardrailConfig {
   maxPerTransaction: number;
   maxDailySpend: number;
   allowedRecipients: Set<string>;
   requireApprovalAbove: number;
+  approvalTimeoutMs: number;
 }
 
 interface LedgerEntry {
@@ -23,14 +25,53 @@ interface LedgerFile {
   entries: LedgerEntry[];
 }
 
+// ── Audit log entry types ──
+
+type AuditDecision = 'ALLOWED' | 'BLOCKED' | 'APPROVED' | 'DENIED' | 'TIMEOUT' | 'DRY_RUN' | 'RECORDED';
+
+interface AuditEntry {
+  timestamp: string;
+  decision: AuditDecision;
+  rule: string;
+  amount: number;
+  recipient: string;
+  details: string;
+}
+
 const LEDGER_PATH = new URL('../.guardrails-ledger.json', import.meta.url).pathname;
+const AUDIT_LOG_PATH = new URL('../.guardrails-audit.jsonl', import.meta.url).pathname;
 
 const guardrailConfig: GuardrailConfig = {
   maxPerTransaction: config.maxPerTransaction,
   maxDailySpend: config.maxDailySpend,
   allowedRecipients: new Set<string>(),
   requireApprovalAbove: config.requireApprovalAbove,
+  approvalTimeoutMs: config.approvalTimeoutMs,
 };
+
+// ── Structured audit logging ──
+
+function audit(decision: AuditDecision, rule: string, amount: number, recipient: string, details: string): void {
+  const entry: AuditEntry = {
+    timestamp: new Date().toISOString(),
+    decision,
+    rule,
+    amount,
+    recipient,
+    details,
+  };
+
+  // Append to JSONL file (one JSON object per line)
+  try {
+    appendFileSync(AUDIT_LOG_PATH, JSON.stringify(entry) + '\n', 'utf-8');
+  } catch {
+    // Audit log failure should not block payments
+  }
+
+  // Console output with decision prefix
+  const symbol = decision === 'ALLOWED' || decision === 'APPROVED' || decision === 'RECORDED' ? '+' : '-';
+  console.log(`  [AUDIT ${symbol}${decision}] ${rule}: $${amount} → ${recipient.slice(0, 10)}... — ${details}`);
+}
 
 // ── Ledger helpers ──
 
@@ -52,9 +93,11 @@ function saveLedger(ledger: LedgerFile): void {
 /**
  * Add a recipient address to the allowlist.
  * Only addresses fetched from the Human Pages API should be added.
+ * Must be called before pay() — empty allowlist = deny all.
  */
 export function addAllowedRecipient(address: string): void {
   guardrailConfig.allowedRecipients.add(address.toLowerCase());
+  audit('ALLOWED', 'allowlist-add', 0, address, 'Address added to allowlist');
 }
 
 /**
@@ -70,20 +113,25 @@ export function getDailySpend(): number {
 }
 
 /**
- * Check whether a transaction is allowed. Throws with a clear reason if blocked.
+ * Run all guardrail checks for a payment. Throws with a clear reason if blocked.
+ * Called automatically by pay() — callers do not need to call this separately.
  */
-export function checkTransaction(amount: number, recipientAddress: string): void {
-  // Hard cap per transaction
+export function enforceGuardrails(amount: number, recipientAddress: string): void {
+  // 1. Hard cap per transaction
   if (amount > guardrailConfig.maxPerTransaction) {
+    audit('BLOCKED', 'per-tx-cap', amount, recipientAddress,
+      `$${amount} exceeds $${guardrailConfig.maxPerTransaction} limit`);
     throw new Error(
       `GUARDRAIL: Payment of $${amount} exceeds max per-transaction limit of $${guardrailConfig.maxPerTransaction}. ` +
       `Adjust MAX_PER_TRANSACTION if this is intentional.`,
     );
   }
 
-  // Daily spend limit
+  // 2. Daily spend limit
   const dailySoFar = getDailySpend();
   if (dailySoFar + amount > guardrailConfig.maxDailySpend) {
+    audit('BLOCKED', 'daily-limit', amount, recipientAddress,
+      `Would push daily to $${dailySoFar + amount}, limit is $${guardrailConfig.maxDailySpend}`);
     throw new Error(
       `GUARDRAIL: Payment of $${amount} would push daily spend to $${dailySoFar + amount}, ` +
       `exceeding the $${guardrailConfig.maxDailySpend} daily limit. ` +
@@ -91,13 +139,17 @@ export function checkTransaction(amount: number, recipientAddress: string): void
     );
   }
 
-  // Allowlisted recipients only
-  if (guardrailConfig.allowedRecipients.size > 0 && !guardrailConfig.allowedRecipients.has(recipientAddress.toLowerCase())) {
-    throw new Error(
-      `GUARDRAIL: Recipient ${recipientAddress} is not in the allowlist. ` +
-      `Only addresses fetched from the Human Pages API are allowed.`,
-    );
+  // 3. Allowlist: fail-closed — empty allowlist = deny all
+  if (!guardrailConfig.allowedRecipients.has(recipientAddress.toLowerCase())) {
+    const reason = guardrailConfig.allowedRecipients.size === 0
+      ? 'Allowlist is empty — call addAllowedRecipient() with an address from the Human Pages API first'
+      : 'Address not in allowlist. Only addresses fetched from the Human Pages API are allowed';
+    audit('BLOCKED', 'allowlist', amount, recipientAddress, reason);
+    throw new Error(`GUARDRAIL: Recipient ${recipientAddress} blocked. ${reason}.`);
   }
+
+  audit('ALLOWED', 'all-checks', amount, recipientAddress,
+    `Per-tx OK ($${amount}/$${guardrailConfig.maxPerTransaction}), daily OK ($${dailySoFar + amount}/$${guardrailConfig.maxDailySpend}), allowlist OK`);
 }
 
 /**
@@ -108,19 +160,47 @@ export function requiresApproval(amount: number): boolean {
 }
 
 /**
- * Prompt the operator on stdin for approval. Returns true if approved.
+ * Prompt the operator for approval with a timeout.
+ * - If stdin is not a TTY (cron, Docker, cloud): auto-deny immediately.
+ * - If TTY: prompt with configurable timeout (default 30s), auto-deny on timeout.
  */
 export async function promptForApproval(amount: number, recipient: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await rl.question(
-      `\n  GUARDRAIL: Payment of $${amount} USDC to ${recipient} exceeds $${guardrailConfig.requireApprovalAbove} approval threshold.\n` +
-      `  Approve this payment? (yes/no): `,
-    );
-    return answer.trim().toLowerCase() === 'yes';
-  } finally {
-    rl.close();
+  // Non-interactive environment: auto-deny
+  if (!process.stdin.isTTY) {
+    audit('DENIED', 'approval-no-tty', amount, recipient,
+      'Non-interactive environment (no TTY) — auto-denied');
+    return false;
   }
+
+  const timeoutMs = guardrailConfig.approvalTimeoutMs;
+
+  return new Promise<boolean>((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+    const timer = setTimeout(() => {
+      rl.close();
+      audit('TIMEOUT', 'approval-timeout', amount, recipient,
+        `No response within ${timeoutMs / 1000}s — auto-denied`);
+      resolve(false);
+    }, timeoutMs);
+
+    rl.question(
+      `\n  GUARDRAIL: Payment of $${amount} USDC to ${recipient} exceeds $${guardrailConfig.requireApprovalAbove} approval threshold.\n` +
+      `  Approve this payment? (yes/no, ${timeoutMs / 1000}s timeout): `,
+    ).then((answer) => {
+      clearTimeout(timer);
+      rl.close();
+      const approved = answer.trim().toLowerCase() === 'yes';
+      audit(approved ? 'APPROVED' : 'DENIED', 'approval-prompt', amount, recipient,
+        approved ? 'Operator approved' : 'Operator denied');
+      resolve(approved);
+    }).catch(() => {
+      clearTimeout(timer);
+      rl.close();
+      audit('DENIED', 'approval-error', amount, recipient, 'Prompt failed — auto-denied');
+      resolve(false);
+    });
+  });
 }
 
 /**
@@ -135,5 +215,6 @@ export function recordTransaction(amount: number, recipientAddress: string, txHa
     txHash,
   });
   saveLedger(ledger);
-  console.log(`  Guardrail ledger: recorded $${amount} to ${recipientAddress} (daily total: $${getDailySpend()})`);
+  audit('RECORDED', 'ledger', amount, recipientAddress,
+    `tx=${txHash.slice(0, 14)}... daily_total=$${getDailySpend()}`);
 }

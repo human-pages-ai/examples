@@ -67,6 +67,7 @@ export const config = {
   maxPerTransaction: parseFloat(optional('MAX_PER_TRANSACTION', '50')),
   maxDailySpend: parseFloat(optional('MAX_DAILY_SPEND', '100')),
   requireApprovalAbove: parseFloat(optional('REQUIRE_APPROVAL_ABOVE', '25')),
+  approvalTimeoutMs: parseInt(optional('APPROVAL_TIMEOUT_MS', '30000'), 10),
 
   // Errand params
   errandDescription: optional(
