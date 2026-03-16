@@ -60,6 +60,38 @@ export async function runBot(humanId: string): Promise<void> {
     console.log('  Continuing — agents are auto-activated on registration.');
   }
 
+  // ── Step 2b: Check funding status ──
+  if (isPaymentConfigured()) {
+    console.log('\nStep 2b: Checking wallet funding...');
+    try {
+      const wallet = await loadWallet();
+      const balance = await checkBalance(wallet, config.paymentNetwork);
+      const balanceNum = parseFloat(balance);
+      console.log(`  Wallet balance: $${balance} USDC on ${config.paymentNetwork}`);
+      if (balanceNum < config.jobPriceUsdc) {
+        const addr = getAddress(wallet);
+        console.log(`  ⚠️  Insufficient balance ($${balance} < $${config.jobPriceUsdc} needed)`);
+        console.log('');
+        console.log('  Fund your agent wallet to continue with crypto payments:');
+        console.log(`    1. Send USDC to ${addr} on ${config.paymentNetwork}`);
+        console.log(`    2. Buy with card: https://global.transak.com/?cryptoCurrencyCode=USDC&network=${encodeURIComponent(config.paymentNetwork)}&walletAddress=${encodeURIComponent(addr)}`);
+        console.log('    3. Convert from Wise/PayPal/Venmo: https://peer.xyz');
+        console.log('');
+        console.log('  Or skip crypto — workers can be paid directly via fiat platforms');
+        console.log('  (Wise, PayPal, Venmo, etc). Use fiat_platform search filter to find compatible workers.');
+        console.log('');
+        console.log('  Continuing without crypto payment capability...');
+      }
+    } catch (err) {
+      console.log(`  Could not check balance: ${(err as Error).message}`);
+      console.log('  Continuing — payment can be set up later.');
+    }
+  } else {
+    console.log('\nStep 2b: No payment wallet configured.');
+    console.log('  Workers can be paid directly via fiat (Wise, PayPal, Venmo, etc).');
+    console.log('  To enable crypto payments, configure a wallet in .env (see WALLET section).');
+  }
+
   // ── Step 3: Fetch the target human ──
   console.log(`\nStep 3: Fetching human ${humanId}...`);
   const candidate = await getHuman(humanId);
@@ -189,8 +221,10 @@ export async function runBot(humanId: string): Promise<void> {
 
       if (parseFloat(balance) < config.jobPriceUsdc) {
         throw new Error(
-          `Insufficient USDC balance: ${balance} < ${config.jobPriceUsdc}. `
-          + `Fund your wallet on ${network}.`,
+          `Insufficient USDC: $${balance} < $${config.jobPriceUsdc} needed\n\n`
+          + `Fund your wallet:\n`
+          + `  Address: ${walletAddress}\n`
+          + `  Network: ${network}`,
         );
       }
 
